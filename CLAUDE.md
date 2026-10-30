@@ -23,6 +23,11 @@ Seven stages, each with a gate: 1 literature review · 2 pre-registration (Niko 
 
 ## Working
 
-- Budget: US$1,000 for the pilot across every session, reported at each gate in `notes/spend.md`; stop at US$800 and ask.
+- **Budget (Niko, 2026-10-31):** no hard stop. Report the spend at every gate in `notes/spend.md` (each session's
+  cost_usd). At about US$3,000 for the pilot, ask the cloud manager before going on.
+- **Low load, steady pace.** This account's usage limits are shared with the map work, and the map comes first. Run at
+  most two agents at once in this project (the manager plus one subagent or session); no wide parallel fan-outs.
+  Use Sonnet for searching and reading, Opus only for design, analysis and the red team. If the session's rate-limit
+  status is no longer "allowed", or the cloud manager asks, pause and say so.
 - Plain English, short sentences. Figures with labelled axes and units.
 - Commits end with the Claude Code attribution lines; no model names in commits or files.
