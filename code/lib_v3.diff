@@ -1,0 +1,100 @@
+--- a/code/lib_v2.R
++++ b/code/lib_v3.R
+@@ -1,4 +1,6 @@
+-# lib_v2.R -- estimator and inference for pre-registration v2.1 as amended by deviations.md D2 (referee ruling).
++# lib_v3.R -- estimator and inference for pre-registration v2.1 as amended by deviations.md D2 and D5 (referee rulings).
++# D5: K2a at p < 0.05; K2b at placebo tail < 0.05; line x quarter variance sigma2_j from each line's 800-1,500 m ring,
++#     added to the placebo draws through the quarter weights.
+ # D2: placebo-district inference (each comparison district gets each treated line's own cohorts, base and weights);
+ #     K2b with a placebo percentile; NNLS variance model with floor; r* breakdown; R28 four-quarter base.
+ suppressPackageStartupMessages(library(data.table))
+@@ -88,9 +90,32 @@
+   list(v = function(m) pmax(best$beta[1] + best$beta[2] / m, fl), floor = fl, beta = best$beta)
+ }
+ 
++## ---- 4b. D5: line x quarter variance sigma2_j from each line's 800-1,500 m ring (k = -20..-1 only) ----
++## For line j: D_t = mean over j's ring villages of y_t minus mean over F of y_t, for quarters t with k = t - g in -20..-1
++## (g = the ring village's nearest cohort). sigma2_j = var_t(D_t) - mean_t(sampling variance of D_t), floored at 0.
++sigma2_lines <- function(ring_cl, ring_g, Yr, YF) {
++  qs <- as.integer(colnames(Yr)); out <- c()
++  for (j in sort(unique(ring_cl))) {
++    rj <- which(ring_cl == j); if (length(rj) < 2) { out[j] <- 0; next }
++    K <- outer(rep(1, length(rj)), qs) - ring_g[rj]; M <- Yr[rj, , drop = FALSE]; M[K < -20 | K > -1] <- NA
++    nq <- colSums(!is.na(M)); use <- which(nq >= 2)
++    if (length(use) < 3) { out[j] <- 0; next }
++    mr <- colMeans(M[, use, drop = FALSE], na.rm = TRUE); vr <- apply(M[, use, drop = FALSE], 2, var, na.rm = TRUE) / nq[use]
++    mf <- colMeans(YF[, use, drop = FALSE]); vf <- apply(YF[, use, drop = FALSE], 2, var) / nrow(YF)
++    Dt <- mr - mf; out[j] <- max(0, var(Dt) - mean(vr + vf)) }
++  out }
++## variance added to line j's contribution: sigma2_j * sum_q c_q^2, c_q = net statistic weight on quarter q (t minus base)
++qweight_var <- function(cells, dec, U, j) {
++  w <- numeric(0); add <- function(q, v) { if (!(q %in% names(w))) w[q] <<- 0; w[q] <<- w[q] + v }
++  for (k in seq_along(cells)) { nj <- sum(U$cl[cells[[k]]$tr] == j); if (!nj) next
++    a <- dec$info$pg[k] * nj / dec$info$nT[k] / dec$E
++    for (q in as.character(cells[[k]]$t)) add(q, a)
++    for (q in as.character(cells[[k]]$b)) add(q, -a / length(cells[[k]]$b)) }
++  sum(w^2, na.rm = TRUE) }
++
+ ## ---- 5. inference: draws for each j from j's own placebo residuals ----
+ ## returns stat, p, CI (test inversion), placebo draws of the statistic and of att_e, and diagnostics
+-infer <- function(U, cells, B = 999L, alpha = 0.05, seed = 1L) {
++infer <- function(U, cells, B = 999L, alpha = 0.05, seed = 1L, sigma2 = NULL) {
+   dec <- decompose(U, cells); if (is.null(dec)) return(NULL)
+   pl <- placebo(U, cells, dec)
+   nT <- sapply(dec$cls, function(j) sum(U$treated & U$cl == j))
+@@ -105,6 +130,9 @@
+     sc <- sqrt(vm$v(nT[j]) / vm$v(n))
+     pick <- sample.int(nrow(P), B, replace = TRUE)
+     draws_e <- draws_e + sweep(R[pick, , drop = FALSE] * sc[pick], 2, wj, "*")
++    if (!is.null(sigma2) && !is.na(sigma2[j]) && sigma2[j] > 0) {          # D5: line x quarter shocks, spread over e
++      sd_j <- sqrt(sigma2[j] * qweight_var(cells, dec, U, j)); z <- rnorm(B, 0, sd_j)
++      draws_e <- draws_e + outer(z, wj / sum(wj)) * E }                      # adds z to the row mean of draws_e
+   }
+   draws <- rowMeans(draws_e)
+   pfun <- function(null) mean(abs(draws) >= abs(dec$stat - null))
+@@ -118,7 +146,7 @@
+   e <- inf_pre$att_e$e; fit <- lm(inf_pre$att_e$att ~ e); pred <- unname(predict(fit, data.frame(e = 5.5)))
+   X <- cbind(1, e); H <- solve(crossprod(X), t(X)); pd <- as.vector(cbind(1, 5.5) %*% (H %*% t(inf_pre$draws_e)))
+   s <- sign(primary_stat); ptail <- mean(s * pd >= s * pred)
+-  list(pred = pred, ptail = ptail, fires = sign(pred) == s && abs(pred) >= 0.5 * abs(primary_stat) && ptail < 0.20)
++  list(pred = pred, ptail = ptail, fires = sign(pred) == s && abs(pred) >= 0.5 * abs(primary_stat) && ptail < 0.05)   # D5: tail < 0.05
+ }
+ ## r*: T changes in post cells with T levels at t divided by r; base quarters unchanged (D2 item 6)
+ r_star <- function(U, Y, cells, dec) {
+@@ -130,12 +158,14 @@
+ 
+ ## ---- 6. the registered configurations ----
+ cfg_primary <- function(V, G_CUTOFF, ant = 12L) {
+-  data.table(treated = V$grp == "T", g = V$g, cl = V$cl, pool = V$grp %in% c("G", "T", "F"), dist = V$dist,
++  data.table(treated = V$grp == "T", g = V$g, cl = V$cl, pool = V$grp %in% c("G", "T", "F"), dist = V$dist,   # R2 rows: neither
+              gv = fcase(V$grp == "F", Inf, V$grp == "G", as.numeric(G_CUTOFF + ant - 1L), V$grp == "T", as.numeric(V$g), default = -Inf)) }
+-run_rules <- function(V, Y, G_CUTOFF, B = 999L, seed = 1L) {
++run_rules <- function(V, Y, G_CUTOFF, B = 999L, seed = 1L, use_sigma = TRUE) {
+   U <- cfg_primary(V, G_CUTOFF)
+-  cP <- cells_of(U, Y, 12L, -13L, 0:11); iP <- infer(U, cP, B, seed = seed)
+-  cK <- cells_of(U, Y, 12L, -13L, -20:-14); iK <- infer(U, cK, B, seed = seed + 1L)
++  s2 <- if (use_sigma && any(V$grp == "R2")) sigma2_lines(V$cl[V$grp == "R2"], V$g[V$grp == "R2"], Y[V$grp == "R2", , drop = FALSE],
++                                                        Y[V$grp == "F", , drop = FALSE]) else NULL
++  cP <- cells_of(U, Y, 12L, -13L, 0:11); iP <- infer(U, cP, B, seed = seed, sigma2 = s2)
++  cK <- cells_of(U, Y, 12L, -13L, -20:-14); iK <- infer(U, cK, B, seed = seed + 1L, sigma2 = s2)
+   kb <- k2b(iK, iP$stat)
+   ## K3a: G with a fake k = 0 at 2020Q1 against F only, anticipation 0, base -1, data up to the G cutoff
+   qs <- as.integer(colnames(Y)); Ya <- Y[, qs < G_CUTOFF, drop = FALSE]
+@@ -145,14 +175,14 @@
+   ## K3b: fake k = 0 at real k = -16, only quarters <= real k = -13 for treated, anticipation 0, base -1, e = 0..3
+   Ub <- copy(U); Ub[treated == TRUE, `:=`(g = g - 16L, gv = gv - 16)]
+   Yb <- Y; for (gc in unique(U$g[U$treated])) { r <- which(U$treated & U$g == gc); Yb[r, qs > gc - 13L] <- NA }
+-  iB <- infer(Ub, cells_of(Ub, Yb, 0L, -1L, 0:3), B, seed = seed + 3L)
++  iB <- infer(Ub, cells_of(Ub, Yb, 0L, -1L, 0:3), B, seed = seed + 3L, sigma2 = s2)
+   p03 <- decompose(U, cells_of(U, Y, 12L, -13L, 0:3))$stat
+   s <- sign(iP$stat)
+   list(primary = iP, pre = iK,
+        rules = data.table(rule = c("K2a", "K2b", "K3a", "K3b"),
+          value = c(iK$stat, kb$pred, iA$stat, iB$stat), p = c(iK$p, kb$ptail, iA$p, iB$p),
+-         fires = c(iK$p < 0.10, kb$fires,
++         fires = c(iK$p < 0.05, kb$fires,                                   # D5: K2a at p < 0.05
+                    sign(iA$stat) == s && iA$p < 0.10 && abs(iA$stat) >= abs(iP$stat) / 3,
+                    sign(iB$stat) == s && iB$p < 0.10 && abs(iB$stat) >= abs(p03) / 3)),
+-       r_star = r_star(U, Y, cP, iP$dec), floored = iP$floored, N0_min = iP$N0_min)
++       r_star = r_star(U, Y, cP, iP$dec), floored = iP$floored, N0_min = iP$N0_min, sigma2 = s2)
+ }

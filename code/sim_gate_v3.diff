@@ -1,0 +1,59 @@
+--- a/code/sim_gate.R
++++ b/code/sim_gate_v3.R
+@@ -1,9 +1,11 @@
+-# sim_gate.R -- the D2 simulation gate. Each seed redraws the layout; B = 999.
+-# Usage: Rscript sim_gate.R <scenario: null|effect|pretrend|stress> <n_seeds> <out.csv> [cores] [first_seed]
++# sim_gate_v3.R -- the D5 simulation gate. Each seed redraws the layout; B = 999.
++# Usage: Rscript sim_gate_v3.R <scenario: null|effect|effect_nosupp|pretrend|stress> <n_seeds> <out.csv> <sigma: on|off> [cores] [first_seed]
++# Stress DGP (D5): district x quarter shocks (SD 10%) for every village, and line x quarter shocks (SD 10%) for every
++# village within 1,500 m of a study line (T, R1 and R2), by nearest line.
+ suppressPackageStartupMessages({ library(data.table); library(parallel) })
+-source("lib_v2.R")
+-a <- commandArgs(TRUE); SC <- a[1]; NS <- as.integer(a[2]); OUTF <- a[3]
+-CORES <- if (length(a) >= 4) as.integer(a[4]) else 4L; S0 <- if (length(a) >= 5) as.integer(a[5]) else 1L
++source("lib_v3.R")
++a <- commandArgs(TRUE); SC <- a[1]; NS <- as.integer(a[2]); OUTF <- a[3]; SIG <- a[4] == "on"
++CORES <- if (length(a) >= 5) as.integer(a[5]) else 4L; S0 <- if (length(a) >= 6) as.integer(a[6]) else 1L
+ G_CUTOFF <- qi(2023, 3)
+ k0 <- function(d) { d <- as.IDate(d); y <- year(d); q <- quarter(d)
+   qend <- as.IDate(sprintf("%d-%02d-01", y + (q == 4), ifelse(q == 4, 1, q * 3 + 1))) - 1L
+@@ -18,7 +20,7 @@
+ 
+ gen <- function(seed, scenario) {
+   set.seed(seed)
+-  tau <- if (scenario == "effect") 0.5 else 0; slope <- if (scenario == "pretrend") 0.04 else 0
++  tau <- if (grepl("effect", scenario)) 0.5 else 0; slope <- if (scenario == "pretrend") 0.04 else 0
+   PRE <- data.table(x = runif(25, 24000, 40000), y = runif(25, 22000, 40000))
+   NV <- 5000; V <- data.table(x = runif(NV, 0, 40000), y = runif(NV, 0, 40000))
+   V[, dist := floor(x / 5000) * 8 + floor(y / 5000)]
+@@ -36,24 +38,25 @@
+   if (scenario == "stress") {
+     R <- R * exp(matrix(rnorm(64 * Q, 0, 0.1), 64, Q)[V$dist + 1, ])                       # district x quarter
+     lines <- unique(ST$cl); LS <- exp(matrix(rnorm(length(lines) * Q, 0, 0.1), length(lines), Q))
+-    near <- V$d < 2000; R[near, ] <- R[near, ] * LS[match(ST$cl[jn[near]], lines), ] }     # line x quarter, within 2 km
++    near <- V$d <= 1500; R[near, ] <- R[near, ] * LS[match(ST$cl[jn[near]], lines), ] }    # line x quarter, within 1,500 m (D5)
+   K <- outer(rep(1, N), qs) - V$g
+   R <- R + tau * (V$d <= 500 & K >= 0) + slope * (V$d <= 500) * (K + 20)
+   mu <- pmax(R, 0) * V$P / 1000
+   Nc <- matrix(rpois(N * Q, 0.6 * mu), N); Nb <- matrix(rpois(N * Q, 0.4 * mu), N)
+   imp <- function(M) { M[M %in% 1:2] <- 1.5; M }                                             # suppressed 1-2 -> 1.5
+-  Y <- 1000 * (imp(Nc) + imp(Nb)) / V$P; colnames(Y) <- qs
+-  keep <- V$dPre > 500 & V$dNon > 800 & V$P >= 500 & V$grp %in% c("T", "G", "F")
++  Y <- 1000 * (if (grepl("nosupp", scenario)) Nc + Nb else imp(Nc) + imp(Nb)) / V$P; colnames(Y) <- qs
++  keep <- V$dPre > 500 & V$dNon > 800 & V$P >= 500 & V$grp %in% c("T", "G", "F", "R2")   # R2 rings feed sigma2_j
+   list(V = V[keep], Y = Y[keep, , drop = FALSE])
+ }
+ 
+ one <- function(s) {
+-  d <- gen(s, SC); r <- tryCatch(run_rules(d$V, d$Y, G_CUTOFF, B = 999L, seed = s), error = function(e) NULL)
++  d <- gen(s, SC); r <- tryCatch(run_rules(d$V, d$Y, G_CUTOFF, B = 999L, seed = s, use_sigma = SIG), error = function(e) NULL)
+   if (is.null(r)) return(data.table(seed = s, ok = FALSE))
+   w <- dcast(r$rules, . ~ rule, value.var = "fires"); pv <- setNames(r$rules$p, paste0("p_", r$rules$rule))
+   data.table(seed = s, ok = TRUE, est = r$primary$stat, p = r$primary$p, lo = r$primary$ci[1], hi = r$primary$ci[2],
+              K2a = w$K2a, K2b = w$K2b, K3a = w$K3a, K3b = w$K3b, r_star = r$r_star, floored = r$floored, N0_min = r$N0_min,
+-             nT = sum(d$V$grp == "T"), p_K2a = pv[["p_K2a"]], p_K2b = pv[["p_K2b"]], v_K2b = r$rules$value[2], p_K3a = pv[["p_K3a"]], p_K3b = pv[["p_K3b"]])
++             nT = sum(d$V$grp == "T"), p_K2a = pv[["p_K2a"]], p_K2b = pv[["p_K2b"]], v_K2b = r$rules$value[2], p_K3a = pv[["p_K3a"]], p_K3b = pv[["p_K3b"]],
++             sigma2_mean = if (is.null(r$sigma2)) NA_real_ else mean(r$sigma2))
+ }
+ t0 <- Sys.time()
+ res <- rbindlist(mclapply(S0:(S0 + NS - 1L), one, mc.cores = CORES), fill = TRUE)

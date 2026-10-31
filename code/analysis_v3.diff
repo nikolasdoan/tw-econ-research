@@ -1,0 +1,51 @@
+--- a/code/analysis_v2.R
++++ b/code/analysis_v3.R
+@@ -1,10 +1,10 @@
+-# analysis_v2.R -- MRT pilot, analysis as pre-registration v2.1 amended by deviations.md D2 (referee ruling on inference).
++# analysis_v3.R -- MRT pilot, analysis as pre-registration v2.1 amended by deviations.md D2 and D5 (referee rulings).
+ # Usage: Rscript analysis.R <export_dir> <out_dir> [B]
+ # Section numbers (§) refer to preregistration/mrt-pilot-v2.md (v2.1).
+ suppressPackageStartupMessages({
+   library(data.table); library(did); library(fixest); library(didimputation)
+   library(bacondecomp); library(ggplot2); library(digest); library(jsonlite) })
+-source("lib_v2.R")
++source("lib_v3.R")
+ args <- commandArgs(TRUE)
+ IN  <- if (length(args) >= 1) args[1] else "../synth_effect"
+ OUT <- if (length(args) >= 2) args[2] else "../out_effect"
+@@ -192,9 +192,9 @@
+ tick("5. primary estimate (§1, §6)")
+ P0 <- make_panel(V0)
+ L0 <- cs_long(P0)                                   # engine table, kept for Appendix A cell counts and r*
+-uy0 <- to_UY(P0[grp %in% c("G", "T", "F")])
++uy0 <- to_UY(P0[grp %in% c("G", "T", "F", "R2")])                 # R2 rings feed sigma2_j (D5); they are not in the pool
+ Vx <- data.table(grp = uy0$grp, g = uy0$U$g, cl = uy0$U$cl, dist = uy0$U$dist)
+-RR <- run_rules(Vx, uy0$Y, G_CUTOFF, B = B, seed = 20261031L)
++RR <- run_rules(Vx, uy0$Y, G_CUTOFF, B = B, seed = 20261031L, use_sigma = TRUE)
+ FP0 <- list(stat = RR$primary$stat, p = RR$primary$p, ci = RR$primary$ci, N0 = RR$primary$N0_min,
+             n_treated_clusters = length(RR$primary$dec$cls), p_min = 1 / (RR$primary$N0_min + 1))
+ att_e0 <- RR$primary$att_e
+@@ -336,12 +336,22 @@
+   run("S4", "Consumer-facing registrations", make_panel(V0, outcome = "consumer"))), fill = TRUE)
+ sec[, p_holm := p.adjust(p, "holm")]
+ 
++## ============ 9b. D5: coarse unsuppressed bias check for the 1.5 imputation (only if the export carries coarse sums) ============
++## registrations_coarse.csv: group (T/F/G) x line x quarter, unsuppressed sums of 公司 + 商業. Compares them with the sums of
++## imputed village counts; reports the implied bias in registrations per 1,000 residents. Reported only; the rule is unchanged.
++coarse_check <- NULL
++if (file.exists(file.path(IN, "registrations_coarse.csv"))) {
++  CO <- rd("registrations_coarse.csv")[, q := q_of(quarter)]
++  IMP <- make_panel(V0)[, .(imputed = sum(y * P / 1000), P = sum(P)), by = .(grp, line, q)]
++  coarse_check <- merge(CO, IMP, by = c("grp", "line", "q"))[, .(bias_per_1000 = mean(1000 * (imputed - n_total) / P)), by = grp]
++  fwrite(coarse_check, file.path(OUT, "coarse_bias_check.csv")) }
++
+ ## ============ 10. outputs ============
+ tick("10. outputs")
+ real <- FP0$stat > 0 && FP0$p < 0.05 && !any(kill$fires) && rob[id == "R1", est] > 0 && r17 > 0 && !r_fragile
+ primary <- data.table(estimate = FP0$stat, p_FP = FP0$p, ci_lo = FP0$ci[1], ci_hi = FP0$ci[2], N0 = FP0$N0,
+                       treated_clusters = FP0$n_treated_clusters, p_min = FP0$p_min, wild_p = rob[id == "R20", p],
+-                      r_star = r_break, floored_clusters = RR$floored, effect_is_real = real, denominator = denom_route)
++                      r_star = r_break, floored_clusters = RR$floored, sigma2_lines = paste(sprintf("%s=%.4f", names(RR$sigma2), RR$sigma2), collapse = "; "), effect_is_real = real, denominator = denom_route)
+ appendixA <- list(input_sha256 = as.list(input_hash), denominator = denom_route, T_per_line = k1_tab, T_total = K1_total,
+                   lines_below_5 = lines_dropped, N0 = FP0$N0, p_min = FP0$p_min,
+                   cells = L0[role == "C", .(comparison_villages = uniqueN(village_id)), by = .(cohort = yq(g), e)][order(cohort, e)])
