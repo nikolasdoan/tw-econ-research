@@ -90,3 +90,29 @@ date, its reason and whether any outcome data had been seen. Results under the o
 - **If any hard limit fails on the fresh seeds:** the study is written up as a short note on design and power, and no outcome file is opened for H1.
 - **R20 and R27** stay on v1's residuals, labelled "check, v1 residuals". Neither can gate.
 - **HonestDiD:** R ≥ 4.4 is installed after the rerun passes, with a second lockfile. Before any outcome file opens, the authors confirm the primary is reproduced to 10 digits on the new R.
+
+---
+## D6. The D5 rerun fails one hard limit; D5 applies as written (referee ruling)
+
+- Entry written: 2026-10-31. No outcome file had been opened. Rerun doc: https://claude.ai/artifact/5DDRhsDYctGGN6c4ij4hYn. The seeds were committed in the doc before any v3 run: null 50001–50500, effect 60001–60200, pre-trend 70001–70200, stress 80001–80200.
+- **Result:** unsuppressed effect coverage was 91.5% with σ²_j on (90.5% off), against a limit of 92.5%, with a Monte Carlo SE of 2.0 points. Every other hard limit passed with σ²_j on.
+- **Ruling:** the gate fails. No outcome file is opened for H1. A limit fixed in advance does not bend because the miss is small, and every proposed remedy would be a second rerun after seeing a failure.
+- **The referee's own error, for the record:** a 92.5% limit tested on 200 seeds (SE about 2 points) made the result partly luck near the boundary. That is a flaw in the gate's design, not in the authors' work, and it does not change the ruling.
+- **The short note must contain:**
+  1. H1 and the signed v2.1 (a743f88), with D1–D6 and their commits.
+  2. The statement: "No registration, closure, price or population-series file was opened."
+  3. All four simulation rounds in one table: every limit, every rate and its Monte Carlo SE, with failures shown as failures.
+  4. The two mechanisms found, stated as findings:
+     - comparison residuals built on one shared base quarter understate the treated noise (fixed by D2's placebo construction);
+     - treatment raises Poisson noise on the treated side, which untreated placebos cannot see, so intervals come out about 10% narrow under a 40% effect.
+  5. Design facts from pre-outcome files only: Appendix A, power and the minimum detectable effect.
+  6. The note's limits: the synthetic DGP is assumed, and the gate has its own Monte Carlo imprecision.
+  7. The referee reports, with the referee's errors stated as errors.
+- **Stage 3:** only work that touches no outcome file. That means the data/pre bundle, Appendix A with hashes, and the note. No primary, secondary or robustness test is run, and no outcome file is opened even descriptively. HonestDiD and R 4.5 are not needed.
+- **A successor study** is legitimate as new work only if all of these hold:
+  - (a) the note is public first, and the new pre-registration cites it as the second design on this question;
+  - (b) the treated-side variance fix is specified in full;
+  - (c) the gate limits are no looser than D5's, with a Monte Carlo SE ≤ 0.75 points (about 1,000 seeds per scenario), and every seed committed in advance;
+  - (d) there is one gate run, with a fixed failure rule; a second failure ends the question on this data;
+  - (e) the reviewing referee is new to this design;
+  - (f) everything that passed is carried over unchanged, or each change is justified in writing.
