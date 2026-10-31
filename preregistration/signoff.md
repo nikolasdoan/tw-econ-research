@@ -4,6 +4,10 @@ The binding text is `mrt-pilot-v2.md` (v2.1), committed here exactly as exported
 "MRT pilot: pre-registration v2" (https://claude.ai/artifact/VzX6uGV1m3fJxZh58LdZLk). `mrt-pilot-v1.md` is kept as the
 record of the first draft.
 
+Exported from the doc at revision 24: 33,044 bytes, SHA-256
+`020f849f7521278f07a94793861d4ab75607479068479e698d79377d3bf82633`. The checkboxes at the end of the doc are left as
+written; this file is the signature record.
+
 | Role | Who | Verdict | Date (UTC) |
 | --- | --- | --- | --- |
 | Author | Niko (段皇方) | Signed ("sign", in the cloud manager's session) | 2026-10-31 |
