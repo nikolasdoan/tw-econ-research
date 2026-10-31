@@ -53,3 +53,40 @@ date, its reason and whether any outcome data had been seen. Results under the o
   - the mapping for the 112 stations with no opening date;
   - the projection to TWD97 TM2.
 - **Results under v2.1's original §6** are still reported, labelled as such.
+
+---
+## D3. 機捷 opening-date source (v2.1 §2, sign-off item 5)
+
+- Entry written: 2026-10-31. No outcome file had been opened.
+- Fare-start / formal opening, 2017-03-02: confirmed by the official open-data row of 交通部鐵道局,
+  data.gov.tw dataset 96918 (鐵道局轄管計畫已完成通車啟用時間, 政府資料開放授權條款 v1):
+  "機場捷運計畫, 106.3.2, 本計畫全線, A1-台北車站 … A21-環北站" (ROC 106.3.2 = 2017-03-02).
+  CSV: https://www.rb.gov.tw/api/proxy/v4/file-service/Opendata%2F%E9%90%B5%E9%81%93%E5%B1%80%E8%BD%84%E7%AE%A1%E8%A8%88%E7%95%AB%E5%B7%B2%E5%AE%8C%E6%88%90%E9%80%9A%E8%BB%8A%E5%95%9F%E7%94%A8%E6%99%82%E9%96%93.csv (file undated).
+- Public free rides from 2017-02-16: still supported only by pages published before that day
+  (Newtalk 2017-01-25; 風傳媒 2017-02-15, https://www.storm.mg/article/223925). No page dated on or after
+  2017-02-16 could be opened.
+- Consequence: none. Under the 45-day rule (§2), 2017-02-16 leaves 44 days in 2017Q1 and 2017-03-02 leaves 30,
+  so both give k = 0 = 2017Q2. The primary and R19 are unchanged.
+```
+
+---
+## D5. Ruling on the D2 gate failure: kill-rule thresholds, small cells, line shocks, and one fresh rerun (referee)
+
+- Entry written: 2026-10-31. No outcome file had been opened. Code v2 and its gate results are code/analysis-code-v2.md (ba06c4e).
+- **The gate failed** on the kill rules' false fires and on the stress case. The new placebo inference works: under the null it rejects 5.6% and covers 94.2%.
+- **K2a:** p < 0.05. The small-sample widening factor calibrated by simulation is rejected, because it would tune a threshold by simulation, which D2 ruled out.
+- **K2b:** the one-sided tail is now < 0.05. The referee's earlier 20% tail fired at least 20% of the time by construction. K2b now tests a trend-shaped pre-violation. The "large but not significant" role moves to R15 (HonestDiD): "If the 95% HonestDiD interval at M̄ = 1 includes 0, the abstract says so and the effect is described as not robust to pre-trends." That is a disclosure, not a kill.
+- **Small cells:** the registered 1.5 imputation stays. Its bias is −0.019, about 4% of the effect, and it pushes against H1. The null run shows no bias. If the export provides coarser unsuppressed sums (cohort × ring × quarter), report the imputation bias against them, labelled as not gating. After opening, report the share of suppressed cells by group and by pre/post period.
+- **Line × quarter variance:** σ²_j is estimated from line j's R2 ring (800–1,500 m), using only quarters k = −20 to −1. It is the variance of the ring's quarter-by-quarter mean deviation from F, minus its sampling variance, floored at 0. It is added to cluster j's placebo draws through the statistic's quarter weights. The stress simulation applies the line × quarter shock to every 村里 within 1,500 m of the line. If the stress case still fails after this, the abstract states: "Inference assumes no line-wide quarterly shocks beyond those estimated from each line's 800–1,500 m ring." That is disclosed, not a stop. Loosening the limits instead was rejected.
+- **The restated gate. It runs on FRESH seeds, once. All rates are reported with Monte Carlo SEs, and every scenario is also run with the line variance on.**
+
+  | Scenario | Seeds | Hard limits |
+  | --- | --- | --- |
+  | Null | 500 | Rejection within 3.0–7.5%; coverage ≥ 92.5%; each kill rule ≤ 12.5% |
+  | Effect | 200 | Coverage ≥ 92.5% on the unsuppressed run; on the suppressed run, bias ≤ 0 and \|bias\| ≤ 10% of the truth; each kill rule ≤ 12.5%; any-kill ≤ 25%; power reported |
+  | Pre-trend | 200 | Any kill ≥ 80% |
+  | Stress | 200 | Rejection ≤ 7.5% and coverage ≥ 92.5% with the line variance on; otherwise the disclosure above |
+
+- **If any hard limit fails on the fresh seeds:** the study is written up as a short note on design and power, and no outcome file is opened for H1.
+- **R20 and R27** stay on v1's residuals, labelled "check, v1 residuals". Neither can gate.
+- **HonestDiD:** R ≥ 4.4 is installed after the rerun passes, with a second lockfile. Before any outcome file opens, the authors confirm the primary is reproduced to 10 digits on the new R.
