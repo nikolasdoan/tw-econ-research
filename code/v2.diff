@@ -1,0 +1,229 @@
+--- a/code/analysis.R
++++ b/code/analysis_v2.R
+@@ -1,9 +1,10 @@
+-# analysis.R -- MRT pilot, analysis exactly as pre-registration v2.1.
++# analysis_v2.R -- MRT pilot, analysis as pre-registration v2.1 amended by deviations.md D2 (referee ruling on inference).
+ # Usage: Rscript analysis.R <export_dir> <out_dir> [B]
+ # Section numbers (§) refer to preregistration/mrt-pilot-v2.md (v2.1).
+ suppressPackageStartupMessages({
+   library(data.table); library(did); library(fixest); library(didimputation)
+   library(bacondecomp); library(ggplot2); library(digest); library(jsonlite) })
++source("lib_v2.R")
+ args <- commandArgs(TRUE)
+ IN  <- if (length(args) >= 1) args[1] else "../synth_effect"
+ OUT <- if (length(args) >= 2) args[2] else "../out_effect"
+@@ -166,12 +167,37 @@
+   list(stat = stat, p = mean(abs(d) >= abs(stat)))
+ }
+ 
++
++## ============ 4b. D2 inference on a long panel (replaces v2.1 section 6 steps 1-4) ============
++to_UY <- function(P, treat = "T", pool = c("G", "T", "F"), ant = ANT, treat_g = NULL) {
++  W <- dcast(P, village_id + grp + g + tclus + district_id ~ q, value.var = "y")
++  Y <- as.matrix(W[, -(1:5)]); colnames(Y) <- names(W)[-(1:5)]
++  U <- data.table(treated = W$grp %in% treat, g = W$g, cl = W$tclus, pool = W$grp %in% pool, dist = W$district_id,
++                  gv = fcase(W$grp %in% c("F", "R1", "R2") & !(W$grp %in% treat), Inf,
++                             W$grp == "G" & !("G" %in% treat), as.numeric(G_CUTOFF + ant - 1L), default = as.numeric(W$g)))
++  list(U = U, Y = Y, ids = W$village_id, grp = W$grp) }
++inf_P <- function(P, treat = "T", pool = c("G", "T", "F"), ant = ANT, base_k = BASE_K, emin = EMIN, emax = EMAX,
++                  drop_q = integer(0), min_ctrl = MIN_CTRL, B_ = B, seed = 1L) {
++  uy <- to_UY(P, treat, pool, ant)
++  if (length(drop_q)) {                       # R1: dropped quarters are not used; a dropped base moves to the latest earlier quarter
++    qs <- as.integer(colnames(uy$Y)); keep <- !(qs %in% drop_q); Y <- uy$Y[, keep, drop = FALSE]
++    cells <- list(); for (gc in sort(unique(uy$U$g[uy$U$treated]))) {
++      b <- gc + base_k; if (b %in% drop_q) b <- max(setdiff(qs[qs < b], drop_q))
++      cc <- cells_of(uy$U[, .(treated = treated & g == gc, g, cl, pool, dist, gv)], Y, ant, b - gc, emin:emax, min_ctrl)
++      cells <- c(cells, cc) }
++    return(infer(uy$U, cells, B_, seed = seed)) }
++  infer(uy$U, cells_of(uy$U, uy$Y, ant, base_k, emin:emax, min_ctrl), B_, seed = seed) }
++
+ ## ============ 5. primary estimate (§1, §6) ============
+ tick("5. primary estimate (§1, §6)")
+ P0 <- make_panel(V0)
+-L0 <- cs_long(P0)
+-FP0 <- fp_test(L0)
+-att_e0 <- attr(L0, "att_e")
++L0 <- cs_long(P0)                                   # engine table, kept for Appendix A cell counts and r*
++uy0 <- to_UY(P0[grp %in% c("G", "T", "F")])
++Vx <- data.table(grp = uy0$grp, g = uy0$U$g, cl = uy0$U$cl, dist = uy0$U$dist)
++RR <- run_rules(Vx, uy0$Y, G_CUTOFF, B = B, seed = 20261031L)
++FP0 <- list(stat = RR$primary$stat, p = RR$primary$p, ci = RR$primary$ci, N0 = RR$primary$N0_min,
++            n_treated_clusters = length(RR$primary$dec$cls), p_min = 1 / (RR$primary$N0_min + 1))
++att_e0 <- RR$primary$att_e
+ ## cross-check against did 2.5.1 on the pool where both definitions coincide (T + F; G's cutoff needs the engine)
+ Pd <- P0[grp %in% c("T", "F")][, gname := fifelse(grp == "F", 0L, as.integer(g))][, id := as.integer(factor(village_id))]
+ cs <- att_gt(yname = "y", tname = "q", idname = "id", gname = "gname", data = as.data.frame(Pd),
+@@ -183,29 +209,9 @@
+ 
+ ## ============ 6. kill rules (§7) ============
+ tick("6. kill rules (§7)")
+-Lpre <- cs_long(P0, emin = -20L, emax = -14L)
+-FPpre <- fp_test(Lpre)
+-pre_e <- attr(Lpre, "att_e")
+-K2a_fires <- FPpre$p < 0.10
+-fitpre <- lm(att ~ e, data = pre_e); pred55 <- unname(predict(fitpre, data.frame(e = 5.5)))
+-K2b_fires <- sign(pred55) == sign(FP0$stat) && abs(pred55) >= 0.5 * abs(FP0$stat)
+-## K3a: G given a fake k = 0 at 2020Q1, F only, anticipation 0, G as one treated cluster
+-P3a <- copy(P0)[grp %in% c("G", "F")][grp == "G", `:=`(g = qi(2020, 1), tclus = "綠線")]
+-L3a <- cs_long(P3a, treat = "G", pool = "F", ant = 0L, base_k = -1L, qmax_use = G_CUTOFF - 1L)
+-FP3a <- fp_test(L3a)
+-K3a_fires <- sign(FP3a$stat) == sign(FP0$stat) && FP3a$p < 0.10 && abs(FP3a$stat) >= abs(FP0$stat) / 3
+-## K3b: fake k = 0 at real k = -16; only quarters <= real k = -13; compared with primary k = 0..3
+-fake <- function(D) { D[grp == "T", `:=`(g_real = g, g = g - 16L)]; D[grp == "T", y := fifelse(q <= g_real - 13L, y, NA_real_)]; D[!is.na(y)] }
+-L3b <- cs_long(P0, ant = 0L, base_k = -1L, emin = 0L, emax = 3L, g_override = function(D) {
+-  D <- fake(D); D[grp %in% c("G", "T", "F")] })
+-## controls must be outside their own real anticipation: re-check validity with the real cohorts
+-FP3b <- fp_test(L3b)
+-L03 <- cs_long(P0, emin = 0L, emax = 3L); prim03 <- stat_of(L03)
+-K3b_fires <- sign(FP3b$stat) == sign(prim03) && FP3b$p < 0.10 && abs(FP3b$stat) >= abs(prim03) / 3
+-kill <- data.table(rule = c("K1", "K2a", "K2b", "K3a", "K3b"),
+-  value = c(K1_total, FPpre$stat, pred55, FP3a$stat, FP3b$stat),
+-  p = c(NA, FPpre$p, NA, FP3a$p, FP3b$p),
+-  fires = c(K1_fires, K2a_fires, K2b_fires, K3a_fires, K3b_fires))
++pre_e <- RR$pre$att_e
++K2 <- RR$rules
++kill <- rbind(data.table(rule = "K1", value = K1_total, p = NA_real_, fires = K1_fires), K2)
+ 
+ ## ============ 7. survivorship (§8, R17) ============
+ tick("7. survivorship (§8, R17)")
+@@ -230,32 +236,36 @@
+   R <- merge(merge(R, Sc[, .(district_id, q, Sc = S)], by = c("district_id", "q")), Sb[, .(district_id, q, Sb = S)], by = c("district_id", "q"))
+   R[, y := 1000 * (nc / Sc + nb / Sb) / P][, .(village_id, q, y, grp, g, line, tclus, district_id, P, in_zone)] }
+ L17 <- cs_long(P17); r17 <- stat_of(L17)
+-## breakdown ratio r: scale T contributions by r until the estimate is zero (y_T / r)
+-Tsum <- L0[role == "T", sum(w * delta)]; Csum <- L0[role == "C", sum(w * delta)]
+-r_break <- if (Csum != 0) Tsum / Csum else NA_real_
+-r_fragile <- is.na(r_break) || (r_break > 0.8 && r_break < 1.25)
++## r* (D2 item 6): T levels in post cells divided by r, bases unchanged; a positive primary is not real if r* < 1.25
++r_break <- RR$r_star
++r_fragile <- is.na(r_break) || r_break < 1.25
+ 
+ ## ============ 8. robustness R1-R27 (§9) ============
+ tick("8. robustness R1-R27 (§9)")
+-run <- function(id, label, L, fp = TRUE, tcl = "line") {
+-  if (is.null(L)) return(data.table(id, label, est = NA_real_, p = NA_real_, lo = NA_real_, hi = NA_real_))
+-  if (fp) { f <- fp_test(L, tcl = tcl, B_ = min(B, 1999L)); data.table(id, label, est = f$stat, p = f$p, lo = f$ci[1], hi = f$ci[2]) }
+-  else data.table(id, label, est = stat_of(L), p = NA_real_, lo = NA_real_, hi = NA_real_) }
++run <- function(id, label, P, ..., fp = TRUE, tcl = "line") {
++  a <- list(...)
++  if (!fp || !is.null(a$wvar) || !is.null(a$g_override) || tcl == "district") {      # point estimate (or old district FP for R27)
++    L <- do.call(cs_long, c(list(P), a)); if (is.null(L)) return(data.table(id, label, est = NA_real_, p = NA_real_, lo = NA_real_, hi = NA_real_))
++    if (tcl == "district") { f <- fp_test(L, tcl = "district", B_ = min(B, 999L)); return(data.table(id, label, est = f$stat, p = f$p, lo = f$ci[1], hi = f$ci[2])) }
++    return(data.table(id, label, est = stat_of(L), p = NA_real_, lo = NA_real_, hi = NA_real_)) }
++  f <- tryCatch(do.call(inf_P, c(list(P), a, list(B_ = min(B, 999L)))), error = function(e) NULL)
++  if (is.null(f)) return(data.table(id, label, est = NA_real_, p = NA_real_, lo = NA_real_, hi = NA_real_))
++  data.table(id, label, est = f$stat, p = f$p, lo = f$ci[1], hi = f$ci[2]) }
+ R <- list()
+-R[[1]]  <- run("R1", "Drop 2020Q1-2022Q4", cs_long(P0, drop_q = COVID))
+-R[[2]]  <- run("R2a", "Drop 環狀", cs_long(P0[line != "環狀" | grp != "T"]))
+-R[[3]]  <- run("R2b", "Drop cohorts opening 2019Q1-2020Q4", cs_long(P0[!(grp == "T" & g >= qi(2019, 1) & g <= qi(2020, 4))]))
++R[[1]]  <- run("R1", "Drop 2020Q1-2022Q4", P0, drop_q = COVID)
++R[[2]]  <- run("R2a", "Drop 環狀", P0[line != "環狀" | grp != "T"])
++R[[3]]  <- run("R2b", "Drop cohorts opening 2019Q1-2020Q4", P0[!(grp == "T" & g >= qi(2019, 1) & g <= qi(2020, 4))])
+ for (l in unique(na.omit(P0[grp == "T", tclus])))
+-  R[[length(R) + 1]] <- run("R3", paste("Leave out", l), cs_long(P0[!(grp == "T" & tclus == l)]), fp = FALSE)
+-R[[length(R) + 1]] <- run("R4", "Anticipation 8, base k = -9", cs_long(P0, ant = 8L, base_k = -9L))
++  R[[length(R) + 1]] <- run("R3", paste("Leave out", l), P0[!(grp == "T" & tclus == l)], fp = FALSE)
++R[[length(R) + 1]] <- run("R4", "Anticipation 8, base k = -9", P0, ant = 8L, base_k = -9L)
+ P_R <- make_panel(V0)[grp %in% c("T", "R2")][grp == "R2", grp := "F"]
+-R[[length(R) + 1]] <- run("R5", "Comparison R2 (800-1,500 m)", cs_long(P_R, pool = "F"))
+-R[[length(R) + 1]] <- run("R6", "Comparison F only", cs_long(P0, pool = "F"))
++R[[length(R) + 1]] <- run("R5", "Comparison R2 (800-1,500 m)", P_R, pool = "F")
++R[[length(R) + 1]] <- run("R6", "Comparison F only", P0, pool = "F")
+ for (rg in c("R1", "R2")) {
+   Pr <- copy(P0)[grp %in% c(rg, "F")][grp == rg, tclus := LINE_CLUSTER[line]]
+-  R[[length(R) + 1]] <- run("R7", paste("Ring", rg, "vs F"), cs_long(Pr, treat = rg, pool = "F")) }
++  R[[length(R) + 1]] <- run("R7", paste("Ring", rg, "vs F"), Pr, treat = rg, pool = "F") }
+ for (rad in c(300, 800)) { Vr <- build_groups(radius = rad)
+-  R[[length(R) + 1]] <- run("R8", paste0("Treated radius ", rad, " m"), cs_long(make_panel(Vr))) }
++  R[[length(R) + 1]] <- run("R8", paste0("Treated radius ", rad, " m"), make_panel(Vr)) }
+ ## R9 Sun & Abraham (fixest), R10 BJS imputation, R11 TWFE + Goodman-Bacon: benchmarks on T + F, point estimates
+ Pf <- P0[grp %in% c("T", "F")][, `:=`(gg = fifelse(grp == "F", 10000L, as.integer(g)), id = as.integer(factor(village_id)))]
+ Pf[, rel := fifelse(grp == "F", -1000L, as.integer(q - gg))]
+@@ -270,13 +280,13 @@
+ Pf[, D := as.integer(grp == "T" & q >= g)]
+ twfe <- feols(y ~ D | id + q, data = Pf, cluster = ~district_id)
+ tick("R9-R10 done"); ## R11 diagnostics on the cohort x quarter mean panel (unit-level bacon() is too slow at ~2,400 units)
+-Pcm <- Pf[, .(y = mean(y), D = max(D)), by = .(coh = fifelse(grp == "F", 0L, as.integer(g)), q)]
++Pcm <- Pf[, .(y = mean(y), D = max(D), w = .N), by = .(coh = fifelse(grp == "F", 0L, as.integer(g)), q)]   # w = cohort size
+ bacon_w <- tryCatch({ bd <- bacon(y ~ D, data = as.data.frame(Pcm), id_var = "coh", time_var = "q", quietly = TRUE)
+   sum(bd$weight[bd$type == "Later vs Earlier Treated"]) }, error = function(e) NA_real_)
+ tick("bacon done"); negw <- tryCatch({ suppressMessages(library(TwoWayFEWeights))
+-  tw <- twowayfeweights(as.data.frame(Pcm), "y", "coh", "q", "D", type = "feTR")
++  tw <- twowayfeweights(as.data.frame(Pcm[rep(seq_len(.N), w)]), "y", "coh", "q", "D", type = "feTR")   # cohort-size weights as row frequency: the weights= argument of TwoWayFEWeights 2.1.0 errors
+   tw$nr_minus / (tw$nr_plus + tw$nr_minus) }, error = function(e) NA_real_)
+-tick("R11 done"); R[[length(R) + 1]] <- data.table(id = "R11", label = sprintf("TWFE (cohort-mean panel: later-vs-earlier weight %.2f; negative-weight share %.2f)", bacon_w, negw),
++tick("R11 done"); R[[length(R) + 1]] <- data.table(id = "R11", label = sprintf("TWFE, unweighted cohort-mean diagnostic (later-vs-earlier weight %.2f; negative-weight share %.2f)", bacon_w, negw),
+                                  est = unname(coef(twfe)["D"]), p = NA, lo = NA, hi = NA)
+ ## R12 Poisson (Wooldridge): cohort x post-period interactions, log P offset, small villages kept
+ Vall <- copy(V0)[excl == "3_small_population" | is.na(excl)]
+@@ -285,7 +295,7 @@
+ Pp[, cell := fifelse(grp == "T" & q >= g & q <= g + 11, paste0("g", g, "_e", q - g), "0")]
+ pois <- fepois(N ~ i(cell, ref = "0") | village_id + q, offset = ~log(P), data = Pp[!(grp == "T" & (q < g - 13 | (q >= g - 12 & q < g)))])
+ pe <- coef(pois); R[[length(R) + 1]] <- data.table(id = "R12", label = "Poisson DiD, mean proportional effect (exp(b) - 1)", est = mean(exp(pe) - 1), p = NA, lo = NA, hi = NA)
+-R[[length(R) + 1]] <- run("R13", "Weighted by base-year population", cs_long(P0, wvar = "P"))
++R[[length(R) + 1]] <- run("R13", "Weighted by base-year population", P0, wvar = "P")
+ ## R14 doubly robust with covariates, did 2.5.1 on T + F
+ Pd2 <- merge(Pd, vil[, .(village_id, area_km2)], by = "village_id")
+ Pd2[, dens := P / area_km2]; Pd2[, ybar := mean(y[q >= qi(2011, 1) & q <= qi(2011, 4)]), by = id]
+@@ -295,34 +305,35 @@
+ R[[length(R) + 1]] <- data.table(id = "R14", label = "Doubly robust, 2 covariates (T + F)",
+   est = if (is.null(cs14)) NA_real_ else aggte(cs14, type = "dynamic", min_e = 0, max_e = 11, na.rm = TRUE, bstrap = FALSE)$overall.att, p = NA, lo = NA, hi = NA)
+ R[[length(R) + 1]] <- data.table(id = "R15", label = "HonestDiD M-bar 0.5/1/2: NOT RUN (package needs R >= 4.4)", est = NA, p = NA, lo = NA, hi = NA)
+-for (ce in c("lo", "hi")) R[[length(R) + 1]] <- run("R16", paste("Small cells imputed at", ce), cs_long(make_panel(V0, cell = ce)))
+-R[[length(R) + 1]] <- data.table(id = "R17", label = sprintf("Survivorship-corrected (breakdown r = %.2f)", r_break), est = r17, p = NA, lo = NA, hi = NA)
+-R[[length(R) + 1]] <- run("R18", "Balanced k = 0..7", cs_long(P0, emax = 7L))
++for (ce in c("lo", "hi")) R[[length(R) + 1]] <- run("R16", paste("Small cells imputed at", ce), make_panel(V0, cell = ce))
++R[[length(R) + 1]] <- data.table(id = "R17", label = sprintf("Survivorship-corrected (r* = %.2f)", r_break), est = r17, p = NA, lo = NA, hi = NA)
++R[[length(R) + 1]] <- run("R18", "Balanced k = 0..7", P0, emax = 7L)
+ V19 <- build_groups(date_col = "open_fare")
+-R[[length(R) + 1]] <- run("R19", "k = 0 from fare-start dates", cs_long(make_panel(V19)))
++R[[length(R) + 1]] <- run("R19", "k = 0 from fare-start dates", make_panel(V19))
+ R[[length(R) + 1]] <- data.table(id = "R20", label = "Wild cluster bootstrap p (check)", est = FP0$stat, p = wild_test(L0, min(B, 1999L))$p, lo = NA, hi = NA)
+-R[[length(R) + 1]] <- run("R21", "Extensive margin (any registration)", cs_long(make_panel(V0, outcome = "any")))
+-R[[length(R) + 1]] <- run("R22", "Drop 機捷 and 綠山 cohorts", cs_long(P0[!(grp == "T" & line %in% c("機捷", "綠山"))]))
+-R[[length(R) + 1]] <- run("R23", "Population-weighted centroid", cs_long(make_panel(build_groups(centroid = "pw"))))
+-R[[length(R) + 1]] <- run("R24", "Exclude development zones", cs_long(P0[in_zone == FALSE]))
+-R[[length(R) + 1]] <- run("R25", "Pool G + T only (no F)", cs_long(P0, pool = c("G", "T")), fp = FALSE)
+-R[[length(R) + 1]] <- run("R26", "Exclude firms with a 遷址 record", cs_long(make_panel(V0, outcome = "nomove")))
+-R[[length(R) + 1]] <- run("R27", "Treated clusters = districts", L0, tcl = "district")
++R[[length(R) + 1]] <- run("R21", "Extensive margin (any registration)", make_panel(V0, outcome = "any"))
++R[[length(R) + 1]] <- run("R22", "Drop 機捷 and 綠山 cohorts", P0[!(grp == "T" & line %in% c("機捷", "綠山"))])
++R[[length(R) + 1]] <- run("R23", "Population-weighted centroid", make_panel(build_groups(centroid = "pw")))
++R[[length(R) + 1]] <- run("R24", "Exclude development zones", P0[in_zone == FALSE])
++R[[length(R) + 1]] <- run("R25", "Pool G + T only (no F)", P0, pool = c("G", "T"), fp = FALSE)
++R[[length(R) + 1]] <- run("R26", "Exclude firms with a 遷址 record", make_panel(V0, outcome = "nomove"))
++R[[length(R) + 1]] <- run("R27", "Treated clusters = districts (check)", P0, tcl = "district")
++R[[length(R) + 1]] <- run("R28", "Base = mean of k = -16..-13 (D2, reported only)", P0, base_k = -16:-13)
+ rob <- rbindlist(R, fill = TRUE)
+ 
+ ## ============ 9. secondary outcomes (§9), Holm across them ============
+ tick("9. secondary outcomes (§9), Holm across the")
+ sec <- rbindlist(list(
+-  run("S1a", "公司 registrations", cs_long(make_panel(V0, outcome = "company"))),
+-  run("S1b", "商業 registrations", cs_long(make_panel(V0, outcome = "business"))),
++  run("S1a", "公司 registrations", make_panel(V0, outcome = "company")),
++  run("S1b", "商業 registrations", make_panel(V0, outcome = "business")),
+   { pr <- rd("prices.csv")[, q := q_of(quarter)]
+     Pq <- merge(pr[, .(village_id, q, y = median_price_m2)], keep(V0)[, .(village_id, grp, g, line, tclus, district_id, P, in_zone)], by = "village_id")
+-    run("S2", "Median residential price per m2 (NT$)", cs_long(Pq[q >= qi(2012, 3)], emin = 0L)) },
++    run("S2", "Median residential price per m2 (NT$)", Pq[q >= qi(2012, 3)], emin = 0L) },
+   { Py <- merge(pop_v, keep(V0)[, .(village_id, grp, g, line, tclus, district_id, P, in_zone)], by = "village_id")
+     Py <- Py[, .(village_id, q = qi(year, 4), y = 100 * (population / P - 1), grp, g, line, tclus, district_id, P, in_zone)]
+     Py <- Py[, .SD[CJ(q = qi(2011, 4):qi(2025, 4)), on = "q", roll = TRUE], by = village_id]
+-    run("S3", "Population growth vs base (%)", cs_long(Py[!is.na(y)], min_ctrl = MIN_CTRL)) },
+-  run("S4", "Consumer-facing registrations", cs_long(make_panel(V0, outcome = "consumer")))), fill = TRUE)
++    run("S3", "Population growth vs base (%)", Py[!is.na(y)], min_ctrl = MIN_CTRL) },
++  run("S4", "Consumer-facing registrations", make_panel(V0, outcome = "consumer"))), fill = TRUE)
+ sec[, p_holm := p.adjust(p, "holm")]
+ 
+ ## ============ 10. outputs ============
+@@ -330,7 +341,7 @@
+ real <- FP0$stat > 0 && FP0$p < 0.05 && !any(kill$fires) && rob[id == "R1", est] > 0 && r17 > 0 && !r_fragile
+ primary <- data.table(estimate = FP0$stat, p_FP = FP0$p, ci_lo = FP0$ci[1], ci_hi = FP0$ci[2], N0 = FP0$N0,
+                       treated_clusters = FP0$n_treated_clusters, p_min = FP0$p_min, wild_p = rob[id == "R20", p],
+-                      r_breakdown = r_break, effect_is_real = real, denominator = denom_route)
++                      r_star = r_break, floored_clusters = RR$floored, effect_is_real = real, denominator = denom_route)
+ appendixA <- list(input_sha256 = as.list(input_hash), denominator = denom_route, T_per_line = k1_tab, T_total = K1_total,
+                   lines_below_5 = lines_dropped, N0 = FP0$N0, p_min = FP0$p_min,
+                   cells = L0[role == "C", .(comparison_villages = uniqueN(village_id)), by = .(cohort = yq(g), e)][order(cohort, e)])
