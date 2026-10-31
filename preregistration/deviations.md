@@ -116,3 +116,11 @@ date, its reason and whether any outcome data had been seen. Results under the o
   - (d) there is one gate run, with a fixed failure rule; a second failure ends the question on this data;
   - (e) the reviewing referee is new to this design;
   - (f) everything that passed is carried over unchanged, or each change is justified in writing.
+
+---
+## D1a. Correction to D1 (who saw the export totals)
+
+- Entry written: 2026-10-31. D1's text stands as committed (b43cdcd); this entry corrects one statement in it.
+- D1 says the research manager "learned of them on 2026-10-31 from this disclosure, after the merge". That is true, and it means the research team **did** see the three whole-window totals: at 01:51 UTC, 17 minutes after the merge (01:34), when the cloud manager sent them so that D1 could be written. Before 01:51, no one on the research team had seen them.
+- No design value changed after 01:51. The synthetic base rate of 1.2 registrations per 1,000 residents per quarter is the authors' own round assumption, written into synth.R at 01:27 UTC, before the merge and before the totals reached them, as the session log shows. It has no source or citation.
+- The design and power note (revised for the fresh referee, M1) states this exception in its §2.
